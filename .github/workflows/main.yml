@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - master
 
 permissions:
   contents: read
@@ -15,41 +14,86 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
-
-      - name: Extract project ZIP
+      - name: Extract JULIUS Project
+        shell: bash
         run: |
-          mkdir extracted
-          unzip -q *.zip -d extracted
+          set -e
 
-      - name: Find Android project
+          mkdir -p project
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: JULIUS ZIP file was not found."
+            exit 1
+          fi
+
+          echo "Using ZIP: $ZIP_FILE"
+          unzip -q "$ZIP_FILE" -d project
+
+          echo "Extracted files:"
+          find project -maxdepth 3 -type f | head -100
+
+      - name: Locate Android Project
+        shell: bash
         run: |
-          PROJECT_DIR=$(find extracted -name settings.gradle.kts -o -name settings.gradle | head -n 1 | xargs dirname)
+          set -e
+
+          SETTINGS=$(find "$GITHUB_WORKSPACE/project" \
+            -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            | head -n 1)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle or settings.gradle.kts was not found."
+            echo "Project contents:"
+            find "$GITHUB_WORKSPACE/project" -maxdepth 5 -type f
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
+          echo "Android project found:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project at: $PROJECT_DIR"
 
-      - name: Set up Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.11.1"
+          gradle-version: '8.11.1'
 
-      - name: Build JULIUS APK
+      - name: Build JULIUS
         working-directory: ${{ env.PROJECT_DIR }}
-        run: gradle --no-daemon assembleDebug
+        shell: bash
+        run: |
+          set -o pipefail
 
-      - name: Upload JULIUS APK
+          gradle --no-daemon \
+            assembleDebug \
+            --stacktrace \
+            --info
+
+      - name: Find APK
+        if: success()
+        shell: bash
+        run: |
+          echo "Searching for APK..."
+          find "$GITHUB_WORKSPACE/project" \
+            -type f -name "*.apk" -print
+
+      - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: JULIUS-Mobile-debug
+          name: JULIUS-Mobile-APK
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
